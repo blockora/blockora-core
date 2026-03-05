@@ -42,6 +42,159 @@ type Wallet struct {
 	Balance int64  `json:"balance"`
 }
 
+// ==================== PoP MINING ====================
+
+type PoPSession struct {
+	ID            string    `json:"id"`
+	Address       string    `json:"address"`
+	StartTime     int64     `json:"start_time"`
+	EndTime       int64     `json:"end_time"`
+	IsActive      bool      `json:"is_active"`
+	ActivityScore float64   `json:"activity_score"`
+	Reward        int64     `json:"reward"`
+	Checks        []Check   `json:"checks"`
+}
+
+type Check struct {
+	Time   int64   `json:"time"`
+	Type   string  `json:"type"`
+	Passed bool    `json:"passed"`
+	Score  float64 `json:"score"`
+}
+
+var (
+	activeSessions = make(map[string]*PoPSession)
+	sessionsMu     sync.RWMutex
+)
+
+// Get session status
+func GetSession(address string) *PoPSession {
+	sessionsMu.RLock()
+	defer sessionsMu.RUnlock()
+	return activeSessions[address]
+}
+
+// Start 24h mining session
+func StartMiningSession(address string) *PoPSession {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	
+	// Check if already active
+	if session, exists := activeSessions[address]; exists && session.IsActive {
+		return session
+	}
+	
+	now := time.Now().Unix()
+	
+	// SAFE: handle short addresses
+	idSuffix := address
+	if len(address) > 8 {
+		idSuffix = address[:8]
+	}
+	
+	session := &PoPSession{
+		ID:            fmt.Sprintf("sess_%d_%s", now, idSuffix),
+		Address:       address,
+		StartTime:     now,
+		EndTime:       now + (24 * 3600),
+		IsActive:      true,
+		ActivityScore: 1.0,
+		Reward:        0,
+		Checks:        []Check{},
+	}
+	
+	activeSessions[address] = session
+	
+	// SAFE: handle short addresses for display
+	displayAddr := address
+	if len(address) > 20 {
+		displayAddr = address[:20]
+	}
+	
+	fmt.Printf("⛏️  Mining Started!\n")
+	fmt.Printf("   User: %s...\n", displayAddr)
+	fmt.Printf("   Start: %s\n", time.Unix(now, 0).Format("15:04:05"))
+	fmt.Printf("   End: %s (24 hours)\n", time.Unix(session.EndTime, 0).Format("15:04:05"))
+	
+	return session
+}
+
+// Perform check (every 4 hours)
+func PerformCheck(address string, checkType string) bool {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	
+	session, exists := activeSessions[address]
+	if !exists || !session.IsActive {
+		return false
+	}
+	
+	passed := true
+	score := 1.0
+	
+	switch checkType {
+	case "kyc":
+		score = 1.0
+	case "bot":
+		score = 0.95 + (float64(time.Now().Unix()%10) / 100.0)
+	case "activity":
+		score = 1.0
+	case "device":
+		score = 1.0
+	}
+	
+	check := Check{
+		Time:   time.Now().Unix(),
+		Type:   checkType,
+		Passed: passed,
+		Score:  score,
+	}
+	
+	session.Checks = append(session.Checks, check)
+	
+	var totalScore float64
+	for _, c := range session.Checks {
+		totalScore += c.Score
+	}
+	session.ActivityScore = totalScore / float64(len(session.Checks))
+	
+	fmt.Printf("✅ Check: %s | Score: %.2f | Passed: %v\n", checkType, score, passed)
+	
+	return passed
+}
+
+// Complete session and calculate reward
+func CompleteSession(address string, baseRate int64) *PoPSession {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	
+	session, exists := activeSessions[address]
+	if !exists || !session.IsActive {
+		return nil
+	}
+	
+	multiplier := 1.0
+	if session.ActivityScore > 0.9 {
+		multiplier = 1.0
+	} else if session.ActivityScore > 0.7 {
+		multiplier = 0.8
+	} else if session.ActivityScore > 0.5 {
+		multiplier = 0.5
+	} else {
+		multiplier = 0.0
+	}
+	
+	session.Reward = int64(float64(baseRate) * session.ActivityScore * multiplier)
+	session.IsActive = false
+	
+	fmt.Printf("\n✅ Mining Session Complete!\n")
+	fmt.Printf("   Activity Score: %.2f\n", session.ActivityScore)
+	fmt.Printf("   Base Rate: %d BORA\n", baseRate)
+	fmt.Printf("   💰 Reward: %d BORA\n", session.Reward)
+	
+	return session
+}
+
 // ==================== DATABASE ====================
 
 type DB struct {
@@ -65,11 +218,8 @@ func (d *DB) SaveBlock(b *Block) {
 	val, _ := json.Marshal(b)
 	d.db.Put([]byte(key), val, nil)
 	
-	// Save height index
 	hKey := fmt.Sprintf("height_%d", b.Height)
 	d.db.Put([]byte(hKey), []byte(b.Hash), nil)
-	
-	// Save tip
 	d.db.Put([]byte("tip"), []byte(b.Hash), nil)
 }
 
@@ -99,23 +249,22 @@ func (d *DB) GetBlockByHeight(h int64) *Block {
 // ==================== BLOCKCHAIN ====================
 
 type Blockchain struct {
-	db       *DB
-	mu       sync.RWMutex
-	tip      string
-	height   int64
-	reward   int64
-	mempool  []*Transaction
+	db      *DB
+	mu      sync.RWMutex
+	tip     string
+	height  int64
+	reward  int64
+	mempool []*Transaction
 }
 
 func NewBlockchain() *Blockchain {
 	db := NewDB()
 	bc := &Blockchain{
-		db:     db,
-		reward: 50,
+		db:      db,
+		reward:  50,
 		mempool: make([]*Transaction, 0),
 	}
 	
-	// Load or create genesis
 	tip := db.GetTip()
 	if tip == "" {
 		bc.createGenesis()
@@ -156,7 +305,6 @@ func (bc *Blockchain) Mine(miner string) *Block {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 	
-	// Simple mining (TargetBits = 16 for fast testing)
 	target := big.NewInt(1)
 	target.Lsh(target, uint(256-16))
 	
@@ -169,7 +317,6 @@ func (bc *Blockchain) Mine(miner string) *Block {
 		txs = txs[:999]
 	}
 	
-	// Coinbase
 	coinbase := &Transaction{
 		ID:     fmt.Sprintf("coinbase_%d", bc.height+1),
 		From:   "mining",
@@ -216,9 +363,7 @@ func (bc *Blockchain) serializeTxs(txs []*Transaction) string {
 }
 
 func (bc *Blockchain) GetBalance(addr string) int64 {
-	// Simple: scan all blocks
-	// In production: use UTXO set
-	return 0 // Simplified for now
+	return 0
 }
 
 func (bc *Blockchain) AddTx(from, to string, amount int64) *Transaction {
@@ -248,7 +393,6 @@ func (bc *Blockchain) GetHeight() int64 {
 }
 
 func (bc *Blockchain) getHeightFromDB() int64 {
-	// Simplified
 	return 0
 }
 
@@ -265,18 +409,20 @@ func main() {
 	
 	r := mux.NewRouter()
 	
-	// Routes
 	r.HandleFunc("/api/status", handleStatus).Methods("GET")
 	r.HandleFunc("/api/wallet/create", handleCreateWallet).Methods("POST")
 	r.HandleFunc("/api/mining/block", handleMine).Methods("POST")
 	r.HandleFunc("/api/transaction", handleTx).Methods("POST")
 	r.HandleFunc("/api/block/{height}", handleGetBlock).Methods("GET")
+	r.HandleFunc("/api/pop/start", handlePoPStart).Methods("POST")
+	r.HandleFunc("/api/pop/check", handlePoPCheck).Methods("POST")
+	r.HandleFunc("/api/pop/complete", handlePoPComplete).Methods("POST")
+	r.HandleFunc("/api/pop/status/{address}", handlePoPStatus).Methods("GET")
 	
-	// CORS
 	handler := enableCORS(r)
 	
-	fmt.Println("🌐 Server: http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	fmt.Println("🌐 Server: http://localhost:8081")
+	log.Fatal(http.ListenAndServe(":8081", handler))
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -364,5 +510,93 @@ func enableCORS(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// ==================== PoP HANDLERS ====================
+
+func handlePoPStart(w http.ResponseWriter, r *http.Request) {
+	var req struct{ Address string `json:"address"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond(w, map[string]interface{}{"success": false, "error": "invalid request"})
+		return
+	}
+	
+	if req.Address == "" {
+		respond(w, map[string]interface{}{"success": false, "error": "address required"})
+		return
+	}
+	
+	session := StartMiningSession(req.Address)
+	
+	respond(w, map[string]interface{}{
+		"success": true,
+		"session": session,
+	})
+}
+
+func handlePoPCheck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Address string `json:"address"`
+		Type    string `json:"type"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	
+	passed := PerformCheck(req.Address, req.Type)
+	
+	respond(w, map[string]interface{}{
+		"success": passed,
+		"check":   req.Type,
+	})
+}
+
+func handlePoPComplete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Address  string `json:"address"`
+		BaseRate int64  `json:"base_rate"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+	
+	session := CompleteSession(req.Address, req.BaseRate)
+	if session == nil {
+		respond(w, map[string]interface{}{
+			"success": false,
+			"error":   "Session not found",
+		})
+		return
+	}
+	
+	// Mine block with reward
+	bc.Mine(req.Address)
+	
+	respond(w, map[string]interface{}{
+		"success": true,
+		"reward":  session.Reward,
+	})
+}
+
+func handlePoPStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	address := vars["address"]
+	
+	session := GetSession(address)
+	if session == nil {
+		respond(w, map[string]interface{}{
+			"success": false,
+			"error":   "No active session",
+		})
+		return
+	}
+	
+	remaining := session.EndTime - time.Now().Unix()
+	if remaining < 0 {
+		remaining = 0
+	}
+	
+	respond(w, map[string]interface{}{
+		"success":        true,
+		"active":         session.IsActive,
+		"activity_score": session.ActivityScore,
+		"remaining_time": remaining,
 	})
 }
