@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⛏️ Blockora Wallet</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        
+        .card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .balance {
+            text-align: center;
+            font-size: 48px;
+            color: #00d9ff;
+            margin: 10px 0;
+        }
+        
+        .balance-label {
+            text-align: center;
+            color: #888;
+            font-size: 14px;
+        }
+        
+        button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #00d9ff, #0066ff);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #00ff88, #00cc66);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+        
+        .status.active {
+            background: rgba(0,255,136,0.2);
+            color: #00ff88;
+        }
+        
+        .status.inactive {
+            background: rgba(255,68,68,0.2);
+            color: #ff4444;
+        }
+        
+        .info {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-size: 14px;
+        }
+        
+        input::placeholder {
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⛏️ Blockora Wallet</h1>
+        
+        <div class="card">
+            <div class="balance-label">Your Balance</div>
+            <div class="balance" id="balance">0</div>
+            <div class="balance-label">BORA</div>
+        </div>
+        
+        <div class="card">
+            <input type="text" id="address" placeholder="Enter your address (e.g., BxUser001)" value="BxUser001">
+            
+            <button class="btn-primary" onclick="startMining()">
+                🚀 START MINING
+            </button>
+            
+            <button class="btn-success" onclick="claimReward()">
+                💰 CLAIM REWARD
+            </button>
+            
+            <button class="btn-secondary" onclick="checkStatus()">
+                📊 CHECK STATUS
+            </button>
+        </div>
+        
+        <div id="status" class="status inactive">
+            Ready to mine
+        </div>
+        
+        <div class="info">
+            🔗 Connected to: blockora-core--ajaychovatiya25.replit.app<br>
+            ⏱️ Mining Duration: 24 hours<br>
+            🎯 Base Reward: 100 BORA
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'https://blockora-core--ajaychovatiya25.replit.app';
+        let currentAddress = 'BxUser001';
+        
+        function updateStatus(message, isActive = false) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = 'status ' + (isActive ? 'active' : 'inactive');
+        }
+        
+        async function startMining() {
+            currentAddress = document.getElementById('address').value || 'BxUser001';
+            updateStatus('Starting mining...', true);
+            
+            try {
+                const response = await fetch(`${API_URL}/api/pop/start`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({address: currentAddress})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateStatus(`⛏️ Mining Active! Session: ${data.session.id}`, true);
+                } else {
+                    updateStatus('❌ Failed to start mining');
+                }
+            } catch (error) {
+                updateStatus('❌ Error: ' + error.message);
+            }
+        }
+        
+        async function claimReward() {
+            currentAddress = document.getElementById('address').value || 'BxUser001';
+            updateStatus('Claiming reward...', true);
+            
+            try {
+                const response = await fetch(`${API_URL}/api/pop/complete`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({address: currentAddress, base_rate: 100})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('balance').textContent = data.reward;
+                    updateStatus(`✅ Reward Claimed: ${data.reward} BORA!`, true);
+                } else {
+                    updateStatus('❌ ' + (data.error || 'Failed to claim'));
+                }
+            } catch (error) {
+                updateStatus('❌ Error: ' + error.message);
+            }
+        }
+        
+        async function checkStatus() {
+            currentAddress = document.getElementById('address').value || 'BxUser001';
+            updateStatus('Checking status...', true);
+            
+            try {
+                const response = await fetch(`${API_URL}/api/pop/status/${currentAddress}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateStatus(`📊 Active: ${data.active} | Score: ${data.activity_score} | Remaining: ${data.remaining_time}s`, data.active);
+                } else {
+                    updateStatus('📊 No active session');
+                }
+            } catch (error) {
+                updateStatus('❌ Error: ' + error.message);
+            }
+        }
+        
+        // Auto-check on load
+        checkStatus();
+    </script>
+</body>
+</html>
